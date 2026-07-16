@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "upstream": "https://api.firecrawl.dev",
+  "cooldown": {
+    "baseMs": 900000,
+    "maxMs": 21600000
+  },
+  "keys": [
+    {
+      "id": "account-1",
+      "apiKey": "fc-YOUR_FIRST_KEY_HERE",
+      "enabled": true
+    },
+    {
+      "id": "account-2",
+      "apiKey": "fc-YOUR_SECOND_KEY_HERE",
+      "enabled": true
+    }
+  ]
+}

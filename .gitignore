@@ -1,0 +1,4 @@
+node_modules/
+firecrawl-keys.json
+*.log
+.DS_Store

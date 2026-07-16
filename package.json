@@ -1,0 +1,26 @@
+{
+  "name": "firecrawl-pool-proxy",
+  "version": "1.0.0",
+  "description": "Round-robin proxy for multiple Firecrawl API keys in MCP setups",
+  "type": "module",
+  "main": "firecrawl-pool-proxy.mjs",
+  "bin": {
+    "firecrawl-pool-proxy": "./firecrawl-pool-proxy.mjs"
+  },
+  "scripts": {
+    "start": "node firecrawl-pool-proxy.mjs"
+  },
+  "keywords": ["firecrawl", "mcp", "proxy", "api-keys", "round-robin"],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "peerDependencies": {
+    "firecrawl-mcp": "*"
+  },
+  "peerDependenciesMeta": {
+    "firecrawl-mcp": {
+      "optional": false
+    }
+  }
+}
