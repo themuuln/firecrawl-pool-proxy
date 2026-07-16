@@ -1,8 +1,8 @@
- # firecrawl-pool-proxy
+# firecrawl-pool
 
- Multi-key proxy for Firecrawl API. Three flavors: Go binary (smallest footprint), Node.js single-process, or child-process (drops into existing firecrawl-mcp setup).
+Multi-key proxy for Firecrawl API. Pools multiple API keys, routes to the healthiest, retries on 402, falls back to free tier.
 
- ## Why this exists
+## Why this exists
 
 The [firecrawl-mcp](https://github.com/firecrawl/firecrawl-mcp-server) npm package takes one `FIRECRAWL_API_KEY`. When that key runs out of credits (HTTP 402), every search/scrape/crawl fails until next month.
 
@@ -10,61 +10,53 @@ If you have multiple Firecrawl accounts — maybe you signed up a few times to g
 
 **Important:** Firecrawl credits are per-account (team), not per-key. Two keys from the same account share the same credit pool. This proxy only helps when keys belong to different accounts with independent balances.
 
- ## How it works
-
- **Lightweight (recommended)** — single process:
-
- ```
- MCP host → stdio → firecrawl-mcp-proxy.mjs → api.firecrawl.dev
- ```
-
- Handles MCP protocol directly, no child process. ~30-50MB RAM, instant startup.
-
- **Child-process** — drops into existing firecrawl-mcp:
-
- ```
- MCP host → stdio → firecrawl-pool-proxy.mjs → firecrawl-mcp (npx) → localhost proxy → api.firecrawl.dev
- ```
-
- Two Node.js processes. Use this if you need firecrawl-mcp's full feature set.
-
- Both versions credit-aware route to the healthiest key, retry on 402, and fall back to Firecrawl's free tier for search/scrape when all keys are exhausted.
-
-## Setup
-
-### 1. Install
-
-Clone this repo or copy `firecrawl-pool-proxy.mjs` somewhere.
+## Install
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/firecrawl-pool-proxy.git
-cd firecrawl-pool-proxy
+# For pi coding agent
+pi install npm:firecrawl-pool
+
+# Or globally via npm
+npm install -g firecrawl-pool
 ```
 
-You also need `firecrawl-mcp` available on your PATH (or npx will fetch it):
+## Quick Start
 
 ```bash
-npm install -g firecrawl-mcp
+# 1. Run the setup wizard
+firecrawl-pool init
+
+# 2. Check your keys
+firecrawl-pool status
+
+# 3. Add to your MCP config (or use pi extension)
 ```
 
-### 2. Create your keys file
+## CLI
 
-Copy the example and fill in your API keys:
+| Command | What it does |
+|---|---|
+| `firecrawl-pool init` | Interactive setup wizard |
+| `firecrawl-pool status` | Show key balances and health |
+| `firecrawl-pool validate` | Test that all keys work |
+| `firecrawl-pool proxy` | Run the MCP proxy (default) |
+
+## Setup (Manual)
+
+### 1. Create your keys file
 
 ```bash
-cp firecrawl-keys.example.json firecrawl-keys.json
+cp firecrawl-keys.example.json ~/.config/firecrawl/keys.json
+chmod 600 ~/.config/firecrawl/keys.json
 ```
 
-Edit `firecrawl-keys.json`:
+Edit `~/.config/firecrawl/keys.json`:
 
 ```json
 {
   "version": 1,
   "upstream": "https://api.firecrawl.dev",
-  "cooldown": {
-    "baseMs": 900000,
-    "maxMs": 21600000
-  },
+  "cooldown": { "baseMs": 900000, "maxMs": 21600000 },
   "keys": [
     { "id": "personal", "apiKey": "fc-your-key-here", "enabled": true },
     { "id": "work", "apiKey": "fc-another-key", "enabled": true }
@@ -72,15 +64,7 @@ Edit `firecrawl-keys.json`:
 }
 ```
 
-Protect it:
-
-```bash
-chmod 600 firecrawl-keys.json
-```
-
-### 3. Point your MCP host at the proxy
-
-Replace the `firecrawl` entry in your MCP config. Here's what it looks like for a typical setup:
+### 2. Point your MCP host at the proxy
 
 **Before (single key):**
 
@@ -90,9 +74,7 @@ Replace the `firecrawl` entry in your MCP config. Here's what it looks like for 
     "firecrawl": {
       "command": "npx",
       "args": ["-y", "firecrawl-mcp"],
-      "env": {
-        "FIRECRAWL_API_KEY": "fc-your-key"
-      }
+      "env": { "FIRECRAWL_API_KEY": "fc-your-key" }
     }
   }
 }
@@ -104,21 +86,35 @@ Replace the `firecrawl` entry in your MCP config. Here's what it looks like for 
 {
   "mcpServers": {
     "firecrawl": {
-      "command": "node",
-      "args": ["/absolute/path/to/firecrawl-pool-proxy.mjs"],
-      "env": {
-        "FIRECRAWL_KEYS_FILE": "/absolute/path/to/firecrawl-keys.json"
-      }
+      "command": "firecrawl-pool",
+      "env": { "FIRECRAWL_KEYS_FILE": "/path/to/keys.json" }
     }
   }
 }
 ```
 
-Use absolute paths. Some MCP hosts don't expand `~`.
+Or for pi coding agent — the extension handles this automatically.
 
-### 4. Restart your MCP host
+## Auto-discovery
 
-That's it. The proxy logs to stderr so you can see key rotation happening.
+The proxy looks for keys file in order:
+1. `FIRECRAWL_KEYS_FILE` env var
+2. `firecrawl-keys.json` next to the binary
+3. `~/.config/firecrawl/keys.json`
+4. `~/.firecrawl-keys.json`
+
+## How it works
+
+```
+MCP host → stdio → firecrawl-pool → api.firecrawl.dev
+```
+
+Single process, handles MCP protocol directly. Go binary (~5MB RAM) or Node.js fallback.
+
+- **Credit-aware routing**: Probes each key's balance on startup, routes to the healthiest
+- **402 auto-retry**: When a key is exhausted, retries with the next one
+- **Keyless fallback**: Search/scrape still work via Firecrawl's free tier when all keys die
+- **Cooldown with backoff**: Blocked keys auto-recover after exponential cooldown
 
 ## Config options
 
@@ -131,34 +127,13 @@ That's it. The proxy logs to stderr so you can see key rotation happening.
 | `keys[].apiKey` | — | Your `fc-...` API key. |
 | `keys[].enabled` | `true` | Set to `false` to temporarily skip a key without removing it. |
 
- ## What happens when keys run out
+## What happens when keys run out
 
- For **search, scrape, and interact**: the proxy falls back to Firecrawl's keyless free tier (rate-limited, no API key needed). You'll get results, just slower.
+For **search, scrape, and interact**: the proxy falls back to Firecrawl's keyless free tier (rate-limited, no API key needed). You'll get results, just slower.
 
- For **everything else** (crawl, agent, map, extract): the proxy returns a 503:
+For **everything else** (crawl, agent, map, extract): the proxy returns a 503.
 
- ```json
- {
-   "error": "All configured Firecrawl keys are exhausted",
-   "nextRetry": "2026-07-16T18:30:00.000Z",
-   "status": [...]
- }
- ```
-
- You can disable keyless fallback with `FIRECRAWL_NO_KEYLESS=1`.
-
- Blocked keys automatically become available again after their cooldown expires. No restart needed.
-
- ## Requirements
-
- - Node.js 22+ (uses built-in `fetch`)
- - `firecrawl-mcp` installed (npm or npx)
-
- ## Limitations
-
- - **No persistent state.** If the proxy restarts, cooldowns reset. That's fine for local use.
- - **Keyless fallback is limited.** Only search, scrape, and interact work without a key. Crawl, agent, and extract still need credits.
- - **Stateful tools (crawl, agent)** create account-owned resources. If a crawl starts on key A, polling it on key B might not work. This is fine for search and scrape — the common case.
+Blocked keys automatically become available again after their cooldown expires. No restart needed.
 
 ## License
 

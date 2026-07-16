@@ -2,3 +2,4 @@ node_modules/
 firecrawl-keys.json
 *.log
 .DS_Store
+firecrawl-mcp-proxy
