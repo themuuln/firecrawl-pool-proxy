@@ -1,6 +1,6 @@
  # firecrawl-pool-proxy
 
- A tiny proxy that rotates multiple Firecrawl API keys behind the `firecrawl-mcp` server.
+ Multi-key proxy for Firecrawl API. Two flavors: lightweight (single process) or child-process (drops into existing firecrawl-mcp setup).
 
  ## Why this exists
 
@@ -10,26 +10,25 @@ If you have multiple Firecrawl accounts — maybe you signed up a few times to g
 
 **Important:** Firecrawl credits are per-account (team), not per-key. Two keys from the same account share the same credit pool. This proxy only helps when keys belong to different accounts with independent balances.
 
-## How it works
+ ## How it works
 
-```
-Your MCP host (Claude Desktop, Cursor, OMP, etc.)
-  │
-  │  JSON-RPC over stdio
-  ▼
-firecrawl-pool-proxy.mjs
-  │
-  │  Spawns firecrawl-mcp as a child process,
-  │  pointed at a localhost HTTP reverse proxy
-  ▼
-localhost HTTP proxy (picks a key per request)
-  │
-  │  Authorization: Bearer <selected-key>
-  ▼
-api.firecrawl.dev
-```
+ **Lightweight (recommended)** — single process:
 
- The proxy never parses MCP messages. It intercepts HTTP requests from the child, checks each key's credit balance on startup, and routes to the one with the most remaining credits. If a key gets a 402, it retries with the next one. When all keys are exhausted, it falls back to Firecrawl's free tier for search/scrape (no key required).
+ ```
+ MCP host → stdio → firecrawl-mcp-proxy.mjs → api.firecrawl.dev
+ ```
+
+ Handles MCP protocol directly, no child process. ~30-50MB RAM, instant startup.
+
+ **Child-process** — drops into existing firecrawl-mcp:
+
+ ```
+ MCP host → stdio → firecrawl-pool-proxy.mjs → firecrawl-mcp (npx) → localhost proxy → api.firecrawl.dev
+ ```
+
+ Two Node.js processes. Use this if you need firecrawl-mcp's full feature set.
+
+ Both versions credit-aware route to the healthiest key, retry on 402, and fall back to Firecrawl's free tier for search/scrape when all keys are exhausted.
 
 ## Setup
 
