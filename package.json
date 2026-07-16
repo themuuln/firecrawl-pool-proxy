@@ -1,12 +1,22 @@
 {
   "name": "firecrawl-pool",
-  "version": "1.0.0",
-  "description": "Multi-key Firecrawl proxy with credit-aware routing, keyless fallback, and 402 retry. Pools multiple API keys and routes to the healthiest.",
+  "version": "1.1.0",
+  "description": "Multi-key Firecrawl proxy with credit-aware routing, keyless fallback, and 402 retry. Go binary (~5MB RAM) with Node.js fallback.",
   "keywords": ["pi-package", "firecrawl", "mcp", "proxy", "web-scraping"],
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/themuuln/firecrawl-pool-proxy.git"
+  },
+  "files": [
+    "bin/",
+    "extensions/",
+    "skills/",
+    "firecrawl-mcp-proxy.mjs",
+    "postinstall.mjs"
+  ],
+  "scripts": {
+    "postinstall": "node postinstall.mjs"
   },
   "pi": {
     "extensions": ["./extensions"],

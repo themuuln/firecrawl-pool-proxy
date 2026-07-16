@@ -1,10 +1,6 @@
 # firecrawl-pool
 
-Multi-key Firecrawl proxy that pools multiple API keys for the `firecrawl-mcp` server.
-
-## What it does
-
-When you have multiple Firecrawl accounts (each with its own free-tier credits), this proxy rotates between them automatically. If one key runs out of credits (HTTP 402), it tries the next one. When all keys are exhausted, it falls back to Firecrawl's free tier for search/scrape.
+Multi-key Firecrawl proxy. Pools multiple API keys, routes to the healthiest, retries on 402, falls back to free tier.
 
 ## Setup
 
@@ -17,21 +13,22 @@ When you have multiple Firecrawl accounts (each with its own free-tier credits),
   "upstream": "https://api.firecrawl.dev",
   "cooldown": { "baseMs": 900000, "maxMs": 21600000 },
   "keys": [
-    { "id": "account-1", "apiKey": "fc-YOUR-KEY-1", "enabled": true },
-    { "id": "account-2", "apiKey": "fc-YOUR-KEY-2", "enabled": true }
+    { "id": "account-1", "apiKey": "fc-KEY-1", "enabled": true },
+    { "id": "account-2", "apiKey": "fc-KEY-2", "enabled": true }
   ]
 }
 ```
 
-3. Set env var: `FIRECRAWL_KEYS_FILE=/path/to/firecrawl-keys.json`
+3. Set env: `FIRECRAWL_KEYS_FILE=/path/to/firecrawl-keys.json`
 
 ## Features
 
-- **Credit-aware routing**: Probes each key's balance on startup, routes to the healthiest
-- **402 auto-retry**: When a key is exhausted, retries with the next one
-- **Keyless fallback**: Search/scrape still work via Firecrawl's free tier when all keys die
-- **Cooldown with backoff**: Blocked keys auto-recover after exponential cooldown
+- Credit-aware routing (probes balances, routes to healthiest key)
+- 402 auto-retry across keys
+- Keyless fallback for search/scrape when all keys die
+- Cooldown with exponential backoff
+- Go binary (~5MB RAM) or Node.js fallback
 
 ## Tools
 
-All 24 Firecrawl MCP tools are supported: scrape, search, map, crawl, extract, interact, agent, monitors, research, etc.
+All 24 Firecrawl tools: scrape, search, map, crawl, extract, interact, agent, monitors, research, etc.
