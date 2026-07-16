@@ -1,8 +1,8 @@
-# firecrawl-pool-proxy
+ # firecrawl-pool-proxy
 
-A tiny proxy that rotates multiple Firecrawl API keys behind the `firecrawl-mcp` server.
+ A tiny proxy that rotates multiple Firecrawl API keys behind the `firecrawl-mcp` server.
 
-## Why this exists
+ ## Why this exists
 
 The [firecrawl-mcp](https://github.com/firecrawl/firecrawl-mcp-server) npm package takes one `FIRECRAWL_API_KEY`. When that key runs out of credits (HTTP 402), every search/scrape/crawl fails until next month.
 
@@ -29,7 +29,7 @@ localhost HTTP proxy (picks a key per request)
 api.firecrawl.dev
 ```
 
-The proxy never parses MCP messages. It intercepts HTTP requests from the child process, injects the right API key, and forwards them upstream. If a key gets a 402, it retries with the next one.
+ The proxy never parses MCP messages. It intercepts HTTP requests from the child, checks each key's credit balance on startup, and routes to the one with the most remaining credits. If a key gets a 402, it retries with the next one. When all keys are exhausted, it falls back to Firecrawl's free tier for search/scrape (no key required).
 
 ## Setup
 
@@ -132,30 +132,34 @@ That's it. The proxy logs to stderr so you can see key rotation happening.
 | `keys[].apiKey` | — | Your `fc-...` API key. |
 | `keys[].enabled` | `true` | Set to `false` to temporarily skip a key without removing it. |
 
-## What happens when keys run out
+ ## What happens when keys run out
 
-The proxy tries every enabled key. If they all return 402, it returns a 503 to the MCP host with a message like:
+ For **search, scrape, and interact**: the proxy falls back to Firecrawl's keyless free tier (rate-limited, no API key needed). You'll get results, just slower.
 
-```json
-{
-  "error": "All configured Firecrawl keys are exhausted",
-  "nextRetry": "2026-07-16T18:30:00.000Z",
-  "status": [...]
-}
-```
+ For **everything else** (crawl, agent, map, extract): the proxy returns a 503:
 
-Blocked keys automatically become available again after their cooldown expires. No restart needed.
+ ```json
+ {
+   "error": "All configured Firecrawl keys are exhausted",
+   "nextRetry": "2026-07-16T18:30:00.000Z",
+   "status": [...]
+ }
+ ```
 
-## Requirements
+ You can disable keyless fallback with `FIRECRAWL_NO_KEYLESS=1`.
 
-- Node.js 22+ (uses built-in `fetch`)
-- `firecrawl-mcp` installed (npm or npx)
+ Blocked keys automatically become available again after their cooldown expires. No restart needed.
 
-## Limitations
+ ## Requirements
 
-- **No persistent state.** If the proxy restarts, cooldowns reset. That's fine for local use.
-- **No keyless fallback.** If all keys are dead, the proxy returns 503. It doesn't fall back to Firecrawl's keyless free tier.
-- **Stateful tools (crawl, agent)** create account-owned resources. If a crawl starts on key A, polling it on key B might not work. This is fine for search and scrape — the common case.
+ - Node.js 22+ (uses built-in `fetch`)
+ - `firecrawl-mcp` installed (npm or npx)
+
+ ## Limitations
+
+ - **No persistent state.** If the proxy restarts, cooldowns reset. That's fine for local use.
+ - **Keyless fallback is limited.** Only search, scrape, and interact work without a key. Crawl, agent, and extract still need credits.
+ - **Stateful tools (crawl, agent)** create account-owned resources. If a crawl starts on key A, polling it on key B might not work. This is fine for search and scrape — the common case.
 
 ## License
 

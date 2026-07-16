@@ -2,15 +2,22 @@
 /**
  * firecrawl-pool-proxy
  *
- * Round-robin proxy for multiple Firecrawl API keys.
- * Sits between your MCP host and firecrawl-mcp, rotating keys
- * and retrying on 402 (credits exhausted).
+ * Round-robin proxy for multiple Firecrawl API keys with credit-aware routing.
+ *
+ * Architecture: MCP host → stdio → firecrawl-mcp child → HTTP → localhost proxy → api.firecrawl.dev
+ *
+ * Features:
+ * - Credit-aware routing: probes each key's balance, routes to the healthiest
+ * - 402 retry: auto-retries with next key when one is exhausted
+ * - Keyless fallback: uses Firecrawl's free tier for search/scrape when all keys dead
+ * - Cooldown: blocked keys auto-recover after exponential backoff
  *
  * Usage:
  *   node firecrawl-pool-proxy.mjs
  *
  * Env:
- *   FIRECRAWL_KEYS_FILE — path to keys JSON (default: ./firecrawl-keys.json)
+ *   FIRECRAWL_KEYS_FILE     — path to keys JSON (default: ./firecrawl-keys.json)
+ *   FIRECRAWL_NO_KEYLESS    — set to "1" to disable keyless fallback
  */
 
 import { createServer } from 'node:http';
@@ -20,6 +27,13 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// Tools that work on Firecrawl's keyless free tier (rate-limited)
+const KEYLESS_SAFE_TOOLS = new Set([
+  'firecrawl_search',
+  'firecrawl_scrape',
+  'firecrawl_interact',
+]);
 
 // ─── Config ─────────────────────────────────────────────────────────────────
 
@@ -37,14 +51,44 @@ function loadConfig() {
     upstream: config.upstream || 'https://api.firecrawl.dev',
     cooldownMs: config.cooldown?.baseMs ?? 900_000,
     maxCooldownMs: config.cooldown?.maxMs ?? 21_600_000,
+    keylessEnabled: process.env.FIRECRAWL_NO_KEYLESS !== '1',
     keys: config.keys.map(k => ({
       id: k.id,
       apiKey: k.apiKey,
       enabled: k.enabled !== false,
       blockedUntil: 0,
       consecutive402s: 0,
+      credits: null, // populated by checkCredits
     })),
   };
+}
+
+// ─── Credit Checking ────────────────────────────────────────────────────────
+
+async function checkCredits(upstream, apiKey) {
+  try {
+    const res = await fetch(`${upstream}/v1/team/credit-usage`, {
+      headers: {
+        'authorization': `Bearer ${apiKey}`,
+        'x-firecrawl-api-key': apiKey,
+      },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data?.data?.remaining_credits ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function checkAllCredits(config) {
+  const results = await Promise.all(
+    config.keys.map(async (key) => {
+      const credits = await checkCredits(config.upstream, key.apiKey);
+      return { id: key.id, credits };
+    }),
+  );
+  return results;
 }
 
 // ─── Key Pool ───────────────────────────────────────────────────────────────
@@ -54,31 +98,37 @@ class KeyPool {
     this.keys = keys;
     this.cooldownMs = cooldownMs;
     this.maxCooldownMs = maxCooldownMs;
-    this.cursor = 0;
   }
 
+  /**
+   * Credit-aware acquisition: picks the enabled, unblocked key with the most
+   * remaining credits. Falls back to round-robin if credits are unknown.
+   */
   acquire(exclude = new Set()) {
     const now = Date.now();
-    for (let i = 0; i < this.keys.length; i++) {
-      const idx = (this.cursor + i) % this.keys.length;
-      const key = this.keys[idx];
-      if (!key.enabled) continue;
-      if (key.blockedUntil > now) continue;
-      if (exclude.has(key.id)) continue;
-      this.cursor = (idx + 1) % this.keys.length;
-      return key;
-    }
-    return null;
+    const eligible = this.keys.filter(k => {
+      if (!k.enabled) return false;
+      if (k.blockedUntil > now) return false;
+      if (exclude.has(k.id)) return false;
+      return true;
+    });
+
+    if (eligible.length === 0) return null;
+
+    // Sort by credits descending (null credits treated as 0)
+    eligible.sort((a, b) => (b.credits ?? 0) - (a.credits ?? 0));
+    return eligible[0];
   }
 
   mark402(key) {
     key.consecutive402s++;
+    key.credits = 0; // 402 means no credits
     const cooldown = Math.min(
       this.cooldownMs * Math.pow(2, key.consecutive402s - 1),
       this.maxCooldownMs,
     );
     key.blockedUntil = Date.now() + cooldown;
-    log(`Key ${key.id} blocked for ${Math.round(cooldown / 1000)}s (402 #${key.consecutive402s})`);
+    log(`Key ${key.id} blocked ${Math.round(cooldown / 1000)}s (402 #${key.consecutive402s})`);
   }
 
   markSuccess(key) {
@@ -106,6 +156,7 @@ class KeyPool {
     const now = Date.now();
     return this.keys.map(k => ({
       id: k.id,
+      credits: k.credits,
       enabled: k.enabled,
       blocked: k.blockedUntil > now,
       blockedUntil: k.blockedUntil > now
@@ -116,6 +167,23 @@ class KeyPool {
   }
 }
 
+// Map Firecrawl API URL paths to MCP tool names
+const PATH_TO_TOOL = {
+  '/v2/search': 'firecrawl_search',
+  '/v2/scrape': 'firecrawl_scrape',
+  '/v2/crawl': 'firecrawl_crawl',
+  '/v2/map': 'firecrawl_map',
+  '/v2/extract': 'firecrawl_extract',
+  '/v2/interact': 'firecrawl_interact',
+};
+
+function detectToolFromUrl(url) {
+  for (const [path, tool] of Object.entries(PATH_TO_TOOL)) {
+    if (url.startsWith(path)) return tool;
+  }
+  return null;
+}
+
 // ─── HTTP Reverse Proxy ─────────────────────────────────────────────────────
 
 function createProxy(config) {
@@ -123,14 +191,43 @@ function createProxy(config) {
 
   const server = createServer(async (req, res) => {
     const body = await collectBody(req);
+    const toolName = detectToolFromUrl(req.url);
+    const isKeylessSafe = config.keylessEnabled && toolName && KEYLESS_SAFE_TOOLS.has(toolName);
+
+    // Try with keys first
     const attempted = new Set();
 
     while (true) {
       const key = pool.acquire(attempted);
 
       if (!key) {
+        // All keys exhausted — try keyless fallback for safe tools
+        if (isKeylessSafe) {
+          log(`All keys exhausted, falling back to keyless for ${toolName}`);
+          try {
+            const upstreamUrl = new URL(req.url, config.upstream);
+            const headers = {
+              'content-type': req.headers['content-type'] || 'application/json',
+            };
+            const upstreamRes = await fetch(upstreamUrl, {
+              method: req.method,
+              headers,
+              body: body.length > 0 ? body : undefined,
+            });
+            const respHeaders = {};
+            upstreamRes.headers.forEach((v, k) => { respHeaders[k] = v; });
+            res.writeHead(upstreamRes.status, respHeaders);
+            const respBody = await upstreamRes.arrayBuffer();
+            res.end(Buffer.from(respBody));
+            return;
+          } catch (err) {
+            log(`Keyless fallback failed: ${err.message}`);
+          }
+        }
+
+        // No fallback available
         const retryAt = pool.nextRetryAt();
-        log(`All keys exhausted. Next retry: ${retryAt || 'unknown'}`);
+        log(`All keys exhausted${isKeylessSafe ? ' (keyless also failed)' : ''}. Next retry: ${retryAt || 'unknown'}`);
         res.writeHead(503, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           error: 'All configured Firecrawl keys are exhausted',
@@ -170,7 +267,7 @@ function createProxy(config) {
         res.end(Buffer.from(respBody));
         return;
       } catch (err) {
-        log(`Key ${key.id}: request error — ${err.message}`);
+        log(`Key ${key.id}: error — ${err.message}`);
         continue;
       }
     }
@@ -239,7 +336,21 @@ async function main() {
   const config = loadConfig();
   log(`Loaded ${config.keys.length} key(s)`);
 
-  const { server } = createProxy(config);
+  // Probe credit balances on startup
+  log('Checking credit balances...');
+  const balances = await checkAllCredits(config);
+  for (const b of balances) {
+    const key = config.keys.find(k => k.id === b.id);
+    if (key) key.credits = b.credits;
+  }
+
+  // Log summary
+  const total = balances.reduce((sum, b) => sum + (b.credits ?? 0), 0);
+  const summaries = balances.map(b => `${b.id}:${b.credits ?? '?'}`).join(' | ');
+  log(`Credits: ${summaries} (total: ${total})`);
+
+  // Start proxy
+  const { server, pool } = createProxy(config);
 
   await new Promise((resolve, reject) => {
     server.listen(0, '127.0.0.1', () => resolve());
@@ -248,6 +359,7 @@ async function main() {
 
   const port = server.address().port;
   log(`Proxy on 127.0.0.1:${port}`);
+  if (config.keylessEnabled) log('Keyless fallback enabled for search/scrape/interact');
 
   const child = spawnMcpChild(port);
   setupStdioRelay(child);
