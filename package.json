@@ -1,8 +1,15 @@
 {
   "name": "firecrawl-pool",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "Multi-key Firecrawl proxy with credit-aware routing, keyless fallback, and 402 retry. CLI + Go binary (~5MB RAM) with Node.js fallback.",
-  "keywords": ["pi-package", "firecrawl", "mcp", "proxy", "web-scraping", "cli"],
+  "keywords": [
+    "pi-package",
+    "firecrawl",
+    "mcp",
+    "proxy",
+    "web-scraping",
+    "cli"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -20,7 +27,12 @@
     "postinstall": "node postinstall.mjs"
   },
   "pi": {
-    "extensions": ["./extensions"],
-    "skills": ["./skills"]
+    "type": "extension",
+    "extensions": [
+      "./extensions"
+    ],
+    "skills": [
+      "./skills"
+    ]
   }
 }
