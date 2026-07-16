@@ -1,6 +1,6 @@
  # firecrawl-pool-proxy
 
- Multi-key proxy for Firecrawl API. Two flavors: lightweight (single process) or child-process (drops into existing firecrawl-mcp setup).
+ Multi-key proxy for Firecrawl API. Three flavors: Go binary (smallest footprint), Node.js single-process, or child-process (drops into existing firecrawl-mcp setup).
 
  ## Why this exists
 
